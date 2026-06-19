@@ -172,10 +172,28 @@ st.dataframe(show, use_container_width=True, height=560, hide_index=True)
 
 
 # ============================ ЕКСПОРТ ============================
-csv = show.to_csv(index=False).encode("utf-8-sig")
-st.download_button(
-    "Завантажити CSV (відфільтроване)",
-    data=csv,
-    file_name=f"{source.lower()}_parts_filtered.csv",
-    mime="text/csv",
-)
+col_csv, col_xlsx = st.columns([1, 1])
+
+with col_csv:
+    csv = show.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "Завантажити CSV",
+        data=csv,
+        file_name=f"{source.lower()}_parts_filtered.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+with col_xlsx:
+    # Excel .xlsx у память через BytesIO (без файлу на диску)
+    import io
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        show.to_excel(writer, index=False, sheet_name=source[:31] or "Parts")
+    st.download_button(
+        "Завантажити Excel",
+        data=buf.getvalue(),
+        file_name=f"{source.lower()}_parts_filtered.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
