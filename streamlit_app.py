@@ -185,11 +185,21 @@ with col_csv:
     )
 
 with col_xlsx:
-    # Excel .xlsx у память через BytesIO (без файлу на диску)
+    # Excel .xlsx у память через BytesIO (без файлу на диску).
+    # Новіші pandas/openpyxl (на Streamlit Cloud) суворо падають на inf та
+    # деяких значеннях. Тому повністю переводимо все у безпечні рядки:
+    # числа/inf/nan -> текст, далі прибираємо літерали inf/nan, ріжемо до ліміту.
     import io
+    safe = show.copy()
+    for c in safe.columns:
+        col = safe[c].astype(str)
+        col = col.replace(
+            {"inf": "", "-inf": "", "nan": "", "NaN": "", "None": "", "NaT": ""}
+        )
+        safe[c] = col.str.slice(0, 32000)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        show.to_excel(writer, index=False, sheet_name=source[:31] or "Parts")
+        safe.to_excel(writer, index=False, sheet_name=(source[:31] or "Parts"))
     st.download_button(
         "Завантажити Excel",
         data=buf.getvalue(),
