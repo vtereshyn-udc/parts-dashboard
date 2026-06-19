@@ -162,7 +162,7 @@ for col_box, (lbl, val) in zip(cols, metric_specs):
 preferred = [
     "brand", "equipment_type", "series", "mower",
     "modification", "year", "total_mods", "serial_numbers",
-    "scheme_name", "oem", "description", "replaces",
+    "scheme_name", "ref_no", "oem", "description", "replaces",
 ]
 ordered = [c for c in preferred if c in f.columns]
 rest = [c for c in f.columns if c not in ordered]
