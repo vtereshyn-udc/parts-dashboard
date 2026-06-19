@@ -207,3 +207,89 @@ with col_xlsx:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
+
+
+
+
+# ============================ ПОШУК OEM: ДЕ ВСТРІЧАЄТЬСЯ ============================
+# Працює по ПОВНІЙ таблиці бренду (df), а не по відфільтрованій — щоб бачити
+# деталь у всіх моделях/схемах, навіть якщо зараз стоять фільтри.
+st.divider()
+st.subheader("🔎 Пошук запчастини за OEM")
+
+oem_q = st.text_input(
+    "Введи OEM-номер (повний або частину)",
+    placeholder="напр. 132-0384",
+    key="oem_lookup",
+)
+
+if oem_q and "oem" in df.columns:
+    q = oem_q.strip().lower()
+    hit = df[df["oem"].astype(str).str.lower().str.contains(q, na=False)]
+    if hit.empty:
+        st.info(f"OEM, що містить «{oem_q}», у каталозі не знайдено.")
+    else:
+        uniq_oem = hit["oem"].nunique()
+        st.caption(f"Знайдено збігів: {len(hit)} рядків, {uniq_oem} унікальних OEM")
+
+        # де встрічається: модель / серійник / схема
+        cols_show = [c for c in
+                     ["oem", "description", "mower", "serial_numbers",
+                      "scheme_name", "ref_no", "replaces"]
+                     if c in hit.columns]
+        st.markdown("**Де встрічається:**")
+        st.dataframe(hit[cols_show], use_container_width=True,
+                     hide_index=True, height=260)
+
+        # чим заміняється (Replaces) — тільки непорожні
+        if "replaces" in hit.columns:
+            repl = hit[hit["replaces"].astype(str).str.strip() != ""]
+            if not repl.empty:
+                pairs = (repl[["oem", "replaces"]]
+                         .drop_duplicates()
+                         .sort_values("oem"))
+                st.markdown("**Заміни (нова деталь ← стара):**")
+                for _, r in pairs.iterrows():
+                    st.markdown(f"- `{r['oem']}` заміняє `{r['replaces']}`")
+            else:
+                st.caption("Для знайдених деталей замін (Replaces) немає.")
+
+
+# ============================ ГРАФІКИ ============================
+# Будуються по ВІДФІЛЬТРОВАНІЙ таблиці (f) — реагують на фільтри в сайдбарі.
+st.divider()
+st.subheader("📊 Огляд каталогу")
+
+g1, g2 = st.columns(2)
+
+with g1:
+    # Топ-10 схем за числом деталей
+    if "scheme_name" in f.columns and not f.empty:
+        top_sch = (f.groupby("scheme_name").size()
+                   .sort_values(ascending=False).head(10))
+        if not top_sch.empty:
+            st.markdown("**Топ схем за числом деталей**")
+            st.bar_chart(top_sch, horizontal=True, height=320)
+
+with g2:
+    # Деталі по косарках (унікальні OEM)
+    if "mower" in f.columns and "oem" in f.columns and not f.empty:
+        per_mower = (f[f["oem"].astype(str).str.strip() != ""]
+                     .groupby("mower")["oem"].nunique()
+                     .sort_values(ascending=False).head(15))
+        if not per_mower.empty:
+            st.markdown("**Унікальних OEM по косарках**")
+            st.bar_chart(per_mower, horizontal=True, height=320)
+
+# Доля деталей із замінами (Replaces)
+if "replaces" in f.columns and "oem" in f.columns and not f.empty:
+    base = f[f["oem"].astype(str).str.strip() != ""]
+    total_oem = base["oem"].nunique()
+    with_repl = base[base["replaces"].astype(str).str.strip() != ""]["oem"].nunique()
+    if total_oem:
+        pct = with_repl / total_oem * 100
+        st.markdown("**Деталі із замінами (Replaces)**")
+        cc1, cc2, cc3 = st.columns(3)
+        cc1.metric("Усього OEM", f"{total_oem:,}")
+        cc2.metric("Із замінами", f"{with_repl:,}")
+        cc3.metric("Частка", f"{pct:.1f}%")
