@@ -23,6 +23,7 @@ from sqlalchemy import create_engine, text
 SOURCES = {
     "Toro":      "parsing_toro",
     "Husqvarna": "parsing_husqvarna",
+    "Ariens":    "parsing_ariens",
 }
 TABLE = "parts"
 
