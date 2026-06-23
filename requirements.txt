@@ -4,4 +4,3 @@ pandas
 sqlalchemy
 openpyxl
 streamlit-aggrid
-streamlit-excel
