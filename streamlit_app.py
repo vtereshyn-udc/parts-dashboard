@@ -20,8 +20,6 @@ from st_aggrid import AgGrid, GridOptionsBuilder
 from st_aggrid.shared import GridUpdateMode
 
 # ============================ ДЖЕРЕЛА ============================
-# Назва для селектбоксу -> схема в БД. Таблиця завжди "parts".
-# Додаєш новий бренд -> просто новий рядок тут.
 SOURCES = {
     "Toro":      "parsing_toro",
     "Husqvarna": "parsing_husqvarna",
@@ -67,24 +65,76 @@ def load_data(schema: str) -> pd.DataFrame:
     return pd.read_sql(f'SELECT * FROM {schema}.{TABLE}', eng)
 
 
-def col_options(frame: pd.DataFrame, col: str):
-    """Унікальні непорожні значення колонки (для фільтра). [] якщо колонки нема."""
-    if col not in frame.columns:
-        return []
-    vals = frame[col].dropna().astype(str)
-    vals = vals[vals.str.strip() != ""].unique().tolist()
-    return sorted(vals)
+# ============================ УМНИЙ ФІЛЬТР (Офіційний патерн Streamlit) ============================
+def filter_dataframe(df: pd.DataFrame, modify: bool) -> pd.DataFrame:
+    """
+    Додає UI для фільтрації всіх колонок DataFrame.
+    Автоматично підбирає тип віджета:
+    - Категорії (до 50 унікальних) -> Multiselect
+    - Категорії (більше 50) -> Текстовий пошук (Contains)
+    - Числа -> Slider (від мінімума до максимума)
+    - Дати -> Date picker
+    """
+    if not modify:
+        return df
 
+    df = df.copy()
+    df = df.convert_dtypes()
 
-def apply_filter(frame: pd.DataFrame, col: str, label: str):
-    """Малює multiselect по колонці, якщо вона є і має значення. Повертає відфільтр."""
-    opts = col_options(frame, col)
-    if not opts:
-        return frame
-    sel = st.sidebar.multiselect(label, opts)
-    if sel:
-        return frame[frame[col].astype(str).isin(sel)]
-    return frame
+    modification_container = st.container()
+
+    with modification_container:
+        to_filter_columns = st.multiselect("Фільтрувати по колонках", df.columns)
+        
+        for column in to_filter_columns:
+            left, right = st.columns((1, 20))
+            left.write("↳")
+
+            # Текстові колонки та категорії
+            if pd.api.types.is_string_dtype(df[column]) or df[column].dtype == "object":
+                # Якщо унікальних значень небагато - даємо мультиселект
+                if df[column].nunique() <= 50:
+                    user_cat_input = right.multiselect(
+                        f"Значення для {column}",
+                        df[column].unique(),
+                        default=list(df[column].unique()),
+                    )
+                    df = df[df[column].isin(user_cat_input)]
+                # Якщо значень дуже багато (напр. довгі описи чи OEM) - даємо текстовий пошук
+                else:
+                    user_text_input = right.text_input(
+                        f"Пошук по {column}", key=f"text_{column}"
+                    )
+                    if user_text_input:
+                        df = df[df[column].astype(str).str.contains(user_text_input, case=False, na=False)]
+            
+            # Числові колонки
+            elif pd.api.types.is_numeric_dtype(df[column]):
+                _min = float(df[column].min())
+                _max = float(df[column].max())
+                step = (_max - _min) / 100
+                
+                user_num_input = right.slider(
+                    f"Діапазон для {column}",
+                    min_value=_min,
+                    max_value=_max,
+                    value=(_min, _max),
+                    step=step,
+                )
+                df = df[df[column].between(user_num_input[0], user_num_input[1])]
+            
+            # Дати
+            elif pd.api.types.is_datetime64_any_dtype(df[column]):
+                user_date_input = right.date_input(
+                    f"Діапазон для {column}",
+                    value=(df[column].min(), df[column].max()),
+                )
+                if len(user_date_input) == 2:
+                    user_date_input = tuple(map(pd.to_datetime, user_date_input))
+                    start_date, end_date = user_date_input
+                    df = df[df[column].between(start_date, end_date)]
+
+    return df
 
 
 # ============================ САЙДБАР: ДЖЕРЕЛО ============================
@@ -117,46 +167,13 @@ if df.empty:
     st.stop()
 
 
-# ============================ ФІЛЬТРИ-СПИСКИ (вибір значень) ============================
-# Списки значень з вибором — обираєш значення -> таблиця звужується.
-f = df.copy()
-
-filter_defs = [
-    ("equipment_type", "Тип обладнання"),
-    ("series", "Серія"),
-    ("mower", "Косарка"),
-    ("modification", "Модифікація"),
-    ("year", "Рік"),
-    ("scheme_name", "Назва схеми"),
-]
-active = [(c, l) for (c, l) in filter_defs if c in f.columns and col_options(f, c)]
-
-with st.expander("🔎 Фільтри по значеннях", expanded=True):
-    selections = {}
-    for i in range(0, len(active), 3):
-        row = active[i:i + 3]
-        boxes = st.columns(len(row))
-        for box, (c, l) in zip(boxes, row):
-            sel = box.multiselect(l, col_options(f, c), key=f"flt_{source}_{c}")
-            if sel:
-                selections[c] = sel
-    for c, sel in selections.items():
-        f = f[f[c].astype(str).isin(sel)]
-
-    txt = st.text_input("Текстовий пошук (OEM / Опис / Replaces)",
-                        key=f"search_{source}")
-    if txt:
-        s = txt.strip().lower()
-        scols = [c for c in ["oem", "description", "replaces"] if c in f.columns]
-        if scols:
-            mask = pd.Series(False, index=f.index)
-            for c in scols:
-                mask |= f[c].astype(str).str.lower().str.contains(s, na=False)
-            f = f[mask]
+# ============================ ЗАСТОСУВАННЯ ФІЛЬТРІВ ============================
+st.subheader("Налаштування відображення")
+modify = st.checkbox("Додати фільтри", key=f"add_filters_{source}")
+f = filter_dataframe(df, modify)
 
 
 # ============================ МЕТРИКИ ============================
-# Малюємо тільки ті метрики, для яких є відповідна колонка.
 metric_specs = []
 metric_specs.append(("Рядків", f"{len(f):,}"))
 if "mower" in f.columns:
@@ -173,18 +190,14 @@ for col_box, (lbl, val) in zip(cols, metric_specs):
 
 
 # ============================ ТАБЛИЦЯ ============================
-# Показуємо ТІЛЬКИ бізнес-колонки (як у ТЗ). Технічні (id, scraped_at,
-# scheme_url, можливі дублі) ховаємо — щоб таблиця була чиста.
 preferred = [
     "brand", "equipment_type", "series", "mower",
     "modification", "year", "total_mods", "serial_numbers",
     "scheme_name", "ref_no", "oem", "description", "replaces",
 ]
-# беремо лише ті preferred-колонки, що реально є; решту (технічні) НЕ показуємо
 ordered = [c for c in preferred if c in f.columns]
 show = f[ordered]
 
-# людські заголовки + ширина під кожну колонку
 COL_CFG = {
     "brand":          ("Бренд", 90),
     "equipment_type": ("Тип обладнання", 170),
@@ -201,34 +214,30 @@ COL_CFG = {
     "replaces":       ("Replaces", 130),
 }
 
-# AgGrid (безкоштовна community): у заголовках — максимум можливого.
-# Set-фільтр з галочками — Enterprise, тому в заголовках текстовий фільтр
-# (Contains/Equals/Begins/Ends) + floating-рядок + сортування + меню колонки.
-# А фільтр-СПИСКИ з вибором значень (як Google Sheets) — у блоці НАД таблицею.
 gb = GridOptionsBuilder.from_dataframe(show)
 gb.configure_default_column(
-    filter="agTextColumnFilter",   # працює в community (Enterprise set-filter — ні)
+    filter="agTextColumnFilter",
     filterParams={
         "buttons": ["reset", "apply", "clear"],
         "closeOnApply": True,
         "debounceMs": 150,
     },
-    floatingFilter=True,           # рядок швидкого фільтра під заголовком
-    sortable=True,                 # сортування кліком по заголовку
-    resizable=True,                # тягнути ширину
-    menuTabs=["filterMenuTab", "generalMenuTab"],  # меню колонки (фільтр + дії)
+    floatingFilter=True,
+    sortable=True,
+    resizable=True,
+    menuTabs=["filterMenuTab", "generalMenuTab"],
     wrapText=False,
     autoHeight=False,
 )
-# заголовок + ширина для кожної наявної колонки
+
 for col in show.columns:
     label, width = COL_CFG.get(col, (col, 140))
     gb.configure_column(col, header_name=label, width=width)
 
 gb.configure_grid_options(
     domLayout="normal",
-    enableCellTextSelection=True,  # можна виділяти/копіювати текст комірок
-    suppressMenuHide=True,         # іконка меню колонки завжди видима
+    enableCellTextSelection=True,
+    suppressMenuHide=True,
 )
 grid_options = gb.build()
 
@@ -237,7 +246,7 @@ AgGrid(
     gridOptions=grid_options,
     height=560,
     theme="streamlit",
-    fit_columns_on_grid_load=False,   # ширини беремо свої (вище), не стискаємо
+    fit_columns_on_grid_load=False,
     allow_unsafe_jscode=True,
     update_mode=GridUpdateMode.NO_UPDATE,
     key=f"grid_{source}",
@@ -258,10 +267,6 @@ with col_csv:
     )
 
 with col_xlsx:
-    # Excel .xlsx у память через BytesIO (без файлу на диску).
-    # Новіші pandas/openpyxl (на Streamlit Cloud) суворо падають на inf та
-    # деяких значеннях. Тому повністю переводимо все у безпечні рядки:
-    # числа/inf/nan -> текст, далі прибираємо літерали inf/nan, ріжемо до ліміту.
     import io
     safe = show.copy()
     for c in safe.columns:
@@ -282,11 +287,7 @@ with col_xlsx:
     )
 
 
-
-
 # ============================ ПОШУК OEM: ДЕ ВСТРІЧАЄТЬСЯ ============================
-# Працює по ПОВНІЙ таблиці бренду (df), а не по відфільтрованій — щоб бачити
-# деталь у всіх моделях/схемах, навіть якщо зараз стоять фільтри.
 st.divider()
 st.subheader("🔎 Пошук запчастини за OEM")
 
@@ -305,7 +306,6 @@ if oem_q and "oem" in df.columns:
         uniq_oem = hit["oem"].nunique()
         st.caption(f"Знайдено збігів: {len(hit)} рядків, {uniq_oem} унікальних OEM")
 
-        # де встрічається: модель / серійник / схема
         cols_show = [c for c in
                      ["oem", "description", "mower", "serial_numbers",
                       "scheme_name", "ref_no", "replaces"]
@@ -314,7 +314,6 @@ if oem_q and "oem" in df.columns:
         st.dataframe(hit[cols_show], use_container_width=True,
                      hide_index=True, height=260)
 
-        # чим заміняється (Replaces) — тільки непорожні
         if "replaces" in hit.columns:
             repl = hit[hit["replaces"].astype(str).str.strip() != ""]
             if not repl.empty:
@@ -329,14 +328,12 @@ if oem_q and "oem" in df.columns:
 
 
 # ============================ ГРАФІКИ ============================
-# Будуються по ВІДФІЛЬТРОВАНІЙ таблиці (f) — реагують на фільтри в сайдбарі.
 st.divider()
 st.subheader("📊 Огляд каталогу")
 
 g1, g2 = st.columns(2)
 
 with g1:
-    # Топ-10 схем за числом деталей
     if "scheme_name" in f.columns and not f.empty:
         top_sch = (f.groupby("scheme_name").size()
                    .sort_values(ascending=False).head(10))
@@ -345,7 +342,6 @@ with g1:
             st.bar_chart(top_sch, horizontal=True, height=320)
 
 with g2:
-    # Деталі по косарках (унікальні OEM)
     if "mower" in f.columns and "oem" in f.columns and not f.empty:
         per_mower = (f[f["oem"].astype(str).str.strip() != ""]
                      .groupby("mower")["oem"].nunique()
@@ -354,7 +350,6 @@ with g2:
             st.markdown("**Унікальних OEM по косарках**")
             st.bar_chart(per_mower, horizontal=True, height=320)
 
-# Доля деталей із замінами (Replaces)
 if "replaces" in f.columns and "oem" in f.columns and not f.empty:
     base = f[f["oem"].astype(str).str.strip() != ""]
     total_oem = base["oem"].nunique()
