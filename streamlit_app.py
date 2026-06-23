@@ -16,6 +16,8 @@ Parts Dashboard (multi-brand)
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
+from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid.shared import GridUpdateMode
 
 # ============================ ДЖЕРЕЛА ============================
 # Назва для селектбоксу -> схема в БД. Таблиця завжди "parts".
@@ -115,30 +117,10 @@ if df.empty:
     st.stop()
 
 
-# ============================ САЙДБАР: ФІЛЬТРИ ============================
-# Кожен фільтр самостійно перевіряє, чи є колонка у цієї таблиці.
-# Перелік ширший, ніж колонки будь-якого одного бренду - зайве не намалюється.
-st.sidebar.header("Фільтри")
-
+# ============================ ДАНІ ДЛЯ ТАБЛИЦІ ============================
+# Фільтри тепер ВБУДОВАНІ в заголовки таблиці (AgGrid) — як у Google Sheets:
+# клік по заголовку -> меню фільтра (галочки/умови), сортування, зміна ширини.
 f = df.copy()
-f = apply_filter(f, "equipment_type", "Тип обладнання")
-f = apply_filter(f, "series", "Серія")
-f = apply_filter(f, "mower", "Косарка")
-f = apply_filter(f, "modification", "Модифікація")   # є у Husqvarna, нема у Toro
-f = apply_filter(f, "year", "Рік")                   # є у Husqvarna
-f = apply_filter(f, "scheme_name", "Назва схеми")
-
-# Пошук - по будь-яких з цих колонок, що присутні
-st.sidebar.divider()
-search = st.sidebar.text_input("Пошук (OEM / Description / Replaces)")
-if search:
-    s = search.strip().lower()
-    search_cols = [c for c in ["oem", "description", "replaces"] if c in f.columns]
-    if search_cols:
-        mask = pd.Series(False, index=f.index)
-        for c in search_cols:
-            mask |= f[c].astype(str).str.lower().str.contains(s, na=False)
-        f = f[mask]
 
 
 # ============================ МЕТРИКИ ============================
@@ -169,7 +151,33 @@ ordered = [c for c in preferred if c in f.columns]
 rest = [c for c in f.columns if c not in ordered]
 show = f[ordered + rest]
 
-st.dataframe(show, use_container_width=True, height=560, hide_index=True)
+# AgGrid: фільтри в заголовках (як у Google Sheets), сортування, зміна ширини.
+gb = GridOptionsBuilder.from_dataframe(show)
+gb.configure_default_column(
+    filter=True,          # меню фільтра в кожному заголовку
+    sortable=True,        # сортування кліком
+    resizable=True,       # тягнути ширину
+    floatingFilter=True,  # рядок швидкого фільтра під заголовком
+)
+# текстовий фільтр з опціями contains/equals для всіх колонок
+gb.configure_default_column(
+    filter="agTextColumnFilter",
+    filterParams={"buttons": ["reset", "apply"], "debounceMs": 200},
+    floatingFilter=True, sortable=True, resizable=True,
+)
+gb.configure_grid_options(domLayout="normal")
+grid_options = gb.build()
+
+AgGrid(
+    show,
+    gridOptions=grid_options,
+    height=560,
+    theme="streamlit",
+    fit_columns_on_grid_load=False,
+    allow_unsafe_jscode=True,
+    update_mode=GridUpdateMode.NO_UPDATE,
+    key=f"grid_{source}",   # окремий грід на кожен бренд
+)
 
 
 # ============================ ЕКСПОРТ ============================
