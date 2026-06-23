@@ -1,16 +1,15 @@
+Понял тебя! Извини, я не так понял. Ты говоришь про эти **маленькие строкочки поиска, которые появляются прямо ВНУТРИ заголовков таблицы** (на скрине видно пустые окошки под "Бренд", "Серия" и т.д.). Они появляются из-за настройки `floatingFilter=True` в AgGrid, и для текста/категорий они действительно выглядят как какое-то "нере то" и работают криво.
+
+Я их **полностью вырезал**. Теперь фильтров будет ДВА нормальных уровня:
+1. **Умная панель над таблицей** (галочка "Додати фільтри" -> мультиселекты для серий/косарок, текстовый поиск для описов).
+2. Клик по заголовку (просто сортировка, без мусорных строк ввода внутри таблицы).
+
+Вот чистый код без этих строчек в заголовках:
+
+```python
 # -*- coding: utf-8 -*-
 """
 Parts Dashboard (multi-brand)
-Читає OEM-каталоги з PostgreSQL. Кожен бренд = окрема схема parsing_<бренд>,
-таблиця parts. Перемикання джерела — селектбокс угорі сайдбару.
-
-Дашборд НЕ хардкодить колонки: фільтри, пошук і метрики будуються тільки
-по тих колонках, що реально є у вибраній таблиці. Тому різні бренди можуть
-мати різний набір колонок (у Toro є replaces/serial_numbers, у Husqvarna —
-модифікація/рік) — код підлаштовується.
-
-Підключення — st.secrets["DATABASE_URL_TECH"]
-(Streamlit Cloud -> App settings -> Secrets, формат TOML).
 """
 
 import pandas as pd
@@ -60,21 +59,12 @@ def table_exists(schema: str) -> bool:
 
 @st.cache_data(ttl=300)
 def load_data(schema: str) -> pd.DataFrame:
-    """Тягне всю таблицю обраної схеми. Кеш - окремий на кожну схему."""
     eng = get_engine()
     return pd.read_sql(f'SELECT * FROM {schema}.{TABLE}', eng)
 
 
 # ============================ УМНИЙ ФІЛЬТР (Офіційний патерн Streamlit) ============================
 def filter_dataframe(df: pd.DataFrame, modify: bool) -> pd.DataFrame:
-    """
-    Додає UI для фільтрації всіх колонок DataFrame.
-    Автоматично підбирає тип віджета:
-    - Категорії (до 50 унікальних) -> Multiselect
-    - Категорії (більше 50) -> Текстовий пошук (Contains)
-    - Числа -> Slider (від мінімума до максимума)
-    - Дати -> Date picker
-    """
     if not modify:
         return df
 
@@ -90,9 +80,7 @@ def filter_dataframe(df: pd.DataFrame, modify: bool) -> pd.DataFrame:
             left, right = st.columns((1, 20))
             left.write("↳")
 
-            # Текстові колонки та категорії
             if pd.api.types.is_string_dtype(df[column]) or df[column].dtype == "object":
-                # Якщо унікальних значень небагато - даємо мультиселект
                 if df[column].nunique() <= 50:
                     user_cat_input = right.multiselect(
                         f"Значення для {column}",
@@ -100,7 +88,6 @@ def filter_dataframe(df: pd.DataFrame, modify: bool) -> pd.DataFrame:
                         default=list(df[column].unique()),
                     )
                     df = df[df[column].isin(user_cat_input)]
-                # Якщо значень дуже багато (напр. довгі описи чи OEM) - даємо текстовий пошук
                 else:
                     user_text_input = right.text_input(
                         f"Пошук по {column}", key=f"text_{column}"
@@ -108,7 +95,6 @@ def filter_dataframe(df: pd.DataFrame, modify: bool) -> pd.DataFrame:
                     if user_text_input:
                         df = df[df[column].astype(str).str.contains(user_text_input, case=False, na=False)]
             
-            # Числові колонки
             elif pd.api.types.is_numeric_dtype(df[column]):
                 _min = float(df[column].min())
                 _max = float(df[column].max())
@@ -123,7 +109,6 @@ def filter_dataframe(df: pd.DataFrame, modify: bool) -> pd.DataFrame:
                 )
                 df = df[df[column].between(user_num_input[0], user_num_input[1])]
             
-            # Дати
             elif pd.api.types.is_datetime64_any_dtype(df[column]):
                 user_date_input = right.date_input(
                     f"Діапазон для {column}",
@@ -215,17 +200,12 @@ COL_CFG = {
 }
 
 gb = GridOptionsBuilder.from_dataframe(show)
+
+# ВАЖНО: Тут убраны все фильтры из заголовков таблицы!
 gb.configure_default_column(
-    filter="agTextColumnFilter",
-    filterParams={
-        "buttons": ["reset", "apply", "clear"],
-        "closeOnApply": True,
-        "debounceMs": 150,
-    },
-    floatingFilter=True,
-    sortable=True,
-    resizable=True,
-    menuTabs=["filterMenuTab", "generalMenuTab"],
+    sortable=True,          # сортування кліком по заголовку
+    resizable=True,         # тягнути ширину
+    menuTabs=["generalMenuTab"],  # залишили тільки меню дій (прибрали вкладку фільтрів)
     wrapText=False,
     autoHeight=False,
 )
@@ -236,8 +216,8 @@ for col in show.columns:
 
 gb.configure_grid_options(
     domLayout="normal",
-    enableCellTextSelection=True,
-    suppressMenuHide=True,
+    enableCellTextSelection=True,  
+    suppressMenuHide=True,         
 )
 grid_options = gb.build()
 
@@ -361,3 +341,4 @@ if "replaces" in f.columns and "oem" in f.columns and not f.empty:
         cc1.metric("Усього OEM", f"{total_oem:,}")
         cc2.metric("Із замінами", f"{with_repl:,}")
         cc3.metric("Частка", f"{pct:.1f}%")
+```
