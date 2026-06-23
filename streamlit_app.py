@@ -18,7 +18,6 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 from st_aggrid import AgGrid, GridOptionsBuilder
 from st_aggrid.shared import GridUpdateMode
-import streamlit_excel
 
 # ============================ ДЖЕРЕЛА ============================
 # Назва для селектбоксу -> схема в БД. Таблиця завжди "parts".
@@ -118,39 +117,42 @@ if df.empty:
     st.stop()
 
 
-# ============================ ФІЛЬТРИ EXCEL-СТИЛЬ (streamlit-excel) ============================
-# Фільтр-віджет з галочками по значеннях колонок — як в Excel/Google Sheets:
-# розкриваєш колонку -> список значень з галочками -> обираєш потрібні.
-# Тримає великі обсяги. table.view -> відфільтрований DataFrame.
-filter_cols_all = [
+# ============================ ФІЛЬТРИ-СПИСКИ (вибір значень) ============================
+# Списки значень з вибором — обираєш значення -> таблиця звужується.
+f = df.copy()
+
+filter_defs = [
     ("equipment_type", "Тип обладнання"),
     ("series", "Серія"),
     ("mower", "Косарка"),
     ("modification", "Модифікація"),
     ("year", "Рік"),
     ("scheme_name", "Назва схеми"),
-    ("oem", "OEM"),
 ]
-# тільки наявні колонки цього бренду
-fcols = [c for (c, l) in filter_cols_all if c in df.columns]
+active = [(c, l) for (c, l) in filter_defs if c in f.columns and col_options(f, c)]
 
-st.subheader("🔎 Фільтри (Excel-стиль)")
+with st.expander("🔎 Фільтри по значеннях", expanded=True):
+    selections = {}
+    for i in range(0, len(active), 3):
+        row = active[i:i + 3]
+        boxes = st.columns(len(row))
+        for box, (c, l) in zip(boxes, row):
+            sel = box.multiselect(l, col_options(f, c), key=f"flt_{source}_{c}")
+            if sel:
+                selections[c] = sel
+    for c, sel in selections.items():
+        f = f[f[c].astype(str).isin(sel)]
 
-# окрема Table-сесія на кожен бренд (key унікальний)
-tbl = streamlit_excel.Table(df, key=f"xls_{source}")
-tbl.show_filter_widget("Фільтрувати за значеннями", fcols)
-f = tbl.view.copy()
-
-# додатковий текстовий пошук (OEM / Опис / Replaces)
-txt = st.text_input("Текстовий пошук (OEM / Опис / Replaces)", key=f"search_{source}")
-if txt:
-    s = txt.strip().lower()
-    scols = [c for c in ["oem", "description", "replaces"] if c in f.columns]
-    if scols:
-        mask = pd.Series(False, index=f.index)
-        for c in scols:
-            mask |= f[c].astype(str).str.lower().str.contains(s, na=False)
-        f = f[mask]
+    txt = st.text_input("Текстовий пошук (OEM / Опис / Replaces)",
+                        key=f"search_{source}")
+    if txt:
+        s = txt.strip().lower()
+        scols = [c for c in ["oem", "description", "replaces"] if c in f.columns]
+        if scols:
+            mask = pd.Series(False, index=f.index)
+            for c in scols:
+                mask |= f[c].astype(str).str.lower().str.contains(s, na=False)
+            f = f[mask]
 
 
 # ============================ МЕТРИКИ ============================
