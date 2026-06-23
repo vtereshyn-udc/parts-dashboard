@@ -202,27 +202,35 @@ COL_CFG = {
     "replaces":       ("Replaces", 130),
 }
 
-# AgGrid: фільтри-СПИСКИ з галочками в заголовках (як у Google Sheets):
-# обираєш значення галочками, є пошук і select-all. Це agSetColumnFilter.
+# AgGrid (безкоштовна community): у заголовках — максимум можливого.
+# Set-фільтр з галочками — Enterprise, тому в заголовках текстовий фільтр
+# (Contains/Equals/Begins/Ends) + floating-рядок + сортування + меню колонки.
+# А фільтр-СПИСКИ з вибором значень (як Google Sheets) — у блоці НАД таблицею.
 gb = GridOptionsBuilder.from_dataframe(show)
 gb.configure_default_column(
-    filter="agSetColumnFilter",   # список значень з галочками (як Google Sheets)
+    filter="agTextColumnFilter",   # працює в community (Enterprise set-filter — ні)
     filterParams={
-        "buttons": ["reset", "apply"],
-        "excelMode": "windows",   # поведінка вибору як в Excel/Sheets
+        "buttons": ["reset", "apply", "clear"],
+        "closeOnApply": True,
+        "debounceMs": 150,
     },
-    floatingFilter=True,
-    sortable=True,
-    resizable=True,
+    floatingFilter=True,           # рядок швидкого фільтра під заголовком
+    sortable=True,                 # сортування кліком по заголовку
+    resizable=True,                # тягнути ширину
+    menuTabs=["filterMenuTab", "generalMenuTab"],  # меню колонки (фільтр + дії)
     wrapText=False,
     autoHeight=False,
 )
-# задаємо заголовок і ширину кожній наявній колонці
+# заголовок + ширина для кожної наявної колонки
 for col in show.columns:
     label, width = COL_CFG.get(col, (col, 140))
     gb.configure_column(col, header_name=label, width=width)
 
-gb.configure_grid_options(domLayout="normal")
+gb.configure_grid_options(
+    domLayout="normal",
+    enableCellTextSelection=True,  # можна виділяти/копіювати текст комірок
+    suppressMenuHide=True,         # іконка меню колонки завжди видима
+)
 grid_options = gb.build()
 
 AgGrid(
