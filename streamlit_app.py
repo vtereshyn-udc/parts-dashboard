@@ -141,30 +141,50 @@ for col_box, (lbl, val) in zip(cols, metric_specs):
 
 
 # ============================ ТАБЛИЦЯ ============================
-# Бажаний порядок колонок; присутні - вперед, решта - як є.
+# Показуємо ТІЛЬКИ бізнес-колонки (як у ТЗ). Технічні (id, scraped_at,
+# scheme_url, можливі дублі) ховаємо — щоб таблиця була чиста.
 preferred = [
     "brand", "equipment_type", "series", "mower",
     "modification", "year", "total_mods", "serial_numbers",
     "scheme_name", "ref_no", "oem", "description", "replaces",
 ]
+# беремо лише ті preferred-колонки, що реально є; решту (технічні) НЕ показуємо
 ordered = [c for c in preferred if c in f.columns]
-rest = [c for c in f.columns if c not in ordered]
-show = f[ordered + rest]
+show = f[ordered]
 
-# AgGrid: фільтри в заголовках (як у Google Sheets), сортування, зміна ширини.
+# людські заголовки + ширина під кожну колонку
+COL_CFG = {
+    "brand":          ("Бренд", 90),
+    "equipment_type": ("Тип обладнання", 170),
+    "series":         ("Серія", 170),
+    "mower":          ("Косарка", 110),
+    "modification":   ("Модифікація", 150),
+    "year":           ("Рік", 90),
+    "total_mods":     ("К-сть модиф.", 110),
+    "serial_numbers": ("Серійні номери", 160),
+    "scheme_name":    ("Назва схеми", 240),
+    "ref_no":         ("Ref", 80),
+    "oem":            ("OEM", 130),
+    "description":    ("Опис", 320),
+    "replaces":       ("Replaces", 130),
+}
+
+# AgGrid: фільтри в заголовках (як Google Sheets), сортування, ширина під вміст.
 gb = GridOptionsBuilder.from_dataframe(show)
-gb.configure_default_column(
-    filter=True,          # меню фільтра в кожному заголовку
-    sortable=True,        # сортування кліком
-    resizable=True,       # тягнути ширину
-    floatingFilter=True,  # рядок швидкого фільтра під заголовком
-)
-# текстовий фільтр з опціями contains/equals для всіх колонок
 gb.configure_default_column(
     filter="agTextColumnFilter",
     filterParams={"buttons": ["reset", "apply"], "debounceMs": 200},
-    floatingFilter=True, sortable=True, resizable=True,
+    floatingFilter=True,
+    sortable=True,
+    resizable=True,
+    wrapText=False,
+    autoHeight=False,
 )
+# задаємо заголовок і ширину кожній наявній колонці
+for col in show.columns:
+    label, width = COL_CFG.get(col, (col, 140))
+    gb.configure_column(col, header_name=label, width=width)
+
 gb.configure_grid_options(domLayout="normal")
 grid_options = gb.build()
 
@@ -173,10 +193,10 @@ AgGrid(
     gridOptions=grid_options,
     height=560,
     theme="streamlit",
-    fit_columns_on_grid_load=False,
+    fit_columns_on_grid_load=False,   # ширини беремо свої (вище), не стискаємо
     allow_unsafe_jscode=True,
     update_mode=GridUpdateMode.NO_UPDATE,
-    key=f"grid_{source}",   # окремий грід на кожен бренд
+    key=f"grid_{source}",
 )
 
 
