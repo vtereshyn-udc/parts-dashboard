@@ -1,12 +1,12 @@
 # -- coding: utf-8 --
 """
-Parts Dashboard (multi-brand) - Оновлена версія з вбудованими фільтрами в таблиці
+Parts Dashboard (multi-brand) - Версія з Mito Sheets (Безкоштовні Excel-фільтри)
 """
 import io
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+from mitosheet.streamlit.v1 import spreadsheet
 
 SOURCES = {
     "Toro": "parsing_toro",
@@ -78,7 +78,7 @@ if df.empty:
     st.stop()
 
 # --- Метрики базового датафрейму ---
-metric_specs = [("Рядків усього", f"{len(df):,}")]
+metric_specs = [("Рядків усього", f"{len(df):2}")]
 if "mower" in df.columns:
     metric_specs.append(("Косарок", df["mower"].nunique()))
 if "oem" in df.columns:
@@ -98,73 +98,47 @@ preferred = [
     "scheme_name", "ref_no", "oem", "description", "replaces",
 ]
 ordered = [c for c in preferred if c in df.columns]
-show = df[ordered]
+show = df[ordered].copy()
 
+# Перейменовуємо колонки відразу в датафреймі, бо Mito відображає технічні назви колонок
 COL_CFG = {
-    "brand": ("Бренд", 90),
-    "equipment_type": ("Тип обладнання", 170),
-    "series": ("Серія", 170),
-    "mower": ("Косарка", 110),
-    "modification": ("Модифікація", 150),
-    "year": ("Рік", 90),
-    "total_mods": ("К-сть модиф.", 110),
-    "serial_numbers": ("Серійні номери", 160),
-    "scheme_name": ("Назва схеми", 240),
-    "ref_no": ("Ref", 80),
-    "oem": ("OEM", 130),
-    "description": ("Опис", 320),
-    "replaces": ("Replaces", 130),
+    "brand": "Бренд",
+    "equipment_type": "Тип обладнання",
+    "series": "Серія",
+    "mower": "Косарка",
+    "modification": "Модифікація",
+    "year": "Рік",
+    "total_mods": "К-сть модиф.",
+    "serial_numbers": "Серійні номери",
+    "scheme_name": "Назва схеми",
+    "ref_no": "Ref",
+    "oem": "OEM",
+    "description": "Опис",
+    "replaces": "Replaces",
 }
+show = show.rename(columns=COL_CFG)
 
-# --- Конфігурація AG Grid із вбудованими фільтрами ---
-gb = GridOptionsBuilder.from_dataframe(show)
-
-gb.configure_default_column(
-    sortable=True,
-    resizable=True,
-    filterable=True,              # Вмикаємо фільтрацію для всіх колонок
-    filter="agTextColumnFilter",  # За замовчуванням текстовий фільтр (Пошук/Містить)
-    menuTabs=["filterMenuTab", "generalMenuTab"], # Додаємо вкладку фільтра в меню заголовка
-    wrapText=False,
-    autoHeight=False,
-)
-
-# Індивідуальне налаштування колонок
-for col in show.columns:
-    label, width = COL_CFG.get(col, (col, 140))
-    
-    # Для числових колонок робимо числовий фільтр замість текстового
-    if col in ["year", "total_mods", "ref_no"]:
-        gb.configure_column(col, header_name=label, width=width, filter="agNumberColumnFilter")
-    else:
-        gb.configure_column(col, header_name=label, width=width)
-
-gb.configure_grid_options(
-    domLayout="normal",
-    enableCellTextSelection=True,
-    suppressMenuHide=False,  # Змінено на False, щоб іконка меню з'являлася при наведенні мишки
-)
-grid_options = gb.build()
-
-# Відображення таблиці
+# --- Відображення інтерактивної таблиці Mito ---
 st.subheader("📋 Каталог деталей")
-st.caption("💡 Наведіть на заголовок будь-якої колонки та натисніть на іконку меню (або лійки) для детального пошуку.")
+st.caption("💡 Натисніть на воронку (фільтр) у заголовку будь-якої колонки. Ви отримаєте пошук та чекбокси з унікальними значеннями.")
 
-AgGrid(
-    show,
-    gridOptions=grid_options,
-    height=560,
-    theme="streamlit",
-    update_mode=GridUpdateMode.NO_UPDATE,
-    key=f"grid_{source}",
-)
+# Виклик Mito Sheet. Повертає змінені датафрейми та код кроків
+final_dfs, edit_history = spreadsheet(show)
 
-# --- Кнопки завантаження даних ---
+# Отримуємо поточний стан датафрейму після того, як користувач пофільтрував його руками в інтерфейсі Mito
+if final_dfs and list(final_dfs.keys()):
+    first_key = list(final_dfs.keys())[0]
+    filtered_show = final_dfs[first_key]
+else:
+    filtered_show = show
+
+# --- Кнопки завантаження пофільтрованих даних ---
+st.write("")
 col_csv, col_xlsx = st.columns([1, 1])
 with col_csv:
-    csv = show.to_csv(index=False).encode("utf-8-sig")
+    csv = filtered_show.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "Завантажити CSV",
+        "Завантажити відфільтрований CSV",
         data=csv,
         file_name=f"{source.lower()}_parts.csv",
         mime="text/csv",
@@ -172,7 +146,7 @@ with col_csv:
     )
 
 with col_xlsx:
-    safe = show.copy()
+    safe = filtered_show.copy()
     for c in safe.columns:
         col = safe[c].astype(str)
         col = col.replace({"inf": "", "-inf": "", "nan": "", "NaN": "", "None": "", "NaT": ""})
@@ -183,7 +157,7 @@ with col_xlsx:
         safe.to_excel(writer, index=False, sheet_name=(source[:31] or "Parts"))
     
     st.download_button(
-        "Завантажити Excel",
+        "Завантажити відфільтрований Excel",
         data=buf.getvalue(),
         file_name=f"{source.lower()}_parts.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -192,7 +166,7 @@ with col_xlsx:
 
 st.divider()
 
-# --- Секція швидкого пошуку по OEM ---
+# --- Секція швидкого окремого пошуку по OEM ---
 st.subheader("🔎 Пошук запчастини за OEM")
 oem_q = st.text_input(
     "Введи OEM-номер (повний або частину)",
