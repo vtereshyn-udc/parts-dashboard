@@ -117,10 +117,43 @@ if df.empty:
     st.stop()
 
 
-# ============================ ДАНІ ДЛЯ ТАБЛИЦІ ============================
-# Фільтри тепер ВБУДОВАНІ в заголовки таблиці (AgGrid) — як у Google Sheets:
-# клік по заголовку -> меню фільтра (галочки/умови), сортування, зміна ширини.
+# ============================ ФІЛЬТРИ-СПИСКИ (як Google Sheets) ============================
+# Списки значень з вибором — надійний фільтр по значеннях (не залежить від
+# Enterprise-функцій AgGrid). Обираєш значення -> таблиця звужується.
 f = df.copy()
+
+filter_defs = [
+    ("equipment_type", "Тип обладнання"),
+    ("series", "Серія"),
+    ("mower", "Косарка"),
+    ("modification", "Модифікація"),
+    ("year", "Рік"),
+    ("scheme_name", "Назва схеми"),
+]
+active = [(c, l) for (c, l) in filter_defs if c in f.columns and col_options(f, c)]
+
+with st.expander("🔎 Фільтри по значеннях (як у Google Sheets)", expanded=True):
+    selections = {}
+    for i in range(0, len(active), 3):
+        row = active[i:i + 3]
+        boxes = st.columns(len(row))
+        for box, (c, l) in zip(boxes, row):
+            sel = box.multiselect(l, col_options(f, c), key=f"flt_{source}_{c}")
+            if sel:
+                selections[c] = sel
+    for c, sel in selections.items():
+        f = f[f[c].astype(str).isin(sel)]
+
+    txt = st.text_input("Текстовий пошук (OEM / Опис / Replaces)",
+                        key=f"search_{source}")
+    if txt:
+        s = txt.strip().lower()
+        scols = [c for c in ["oem", "description", "replaces"] if c in f.columns]
+        if scols:
+            mask = pd.Series(False, index=f.index)
+            for c in scols:
+                mask |= f[c].astype(str).str.lower().str.contains(s, na=False)
+            f = f[mask]
 
 
 # ============================ МЕТРИКИ ============================
@@ -169,11 +202,15 @@ COL_CFG = {
     "replaces":       ("Replaces", 130),
 }
 
-# AgGrid: фільтри в заголовках (як Google Sheets), сортування, ширина під вміст.
+# AgGrid: фільтри-СПИСКИ з галочками в заголовках (як у Google Sheets):
+# обираєш значення галочками, є пошук і select-all. Це agSetColumnFilter.
 gb = GridOptionsBuilder.from_dataframe(show)
 gb.configure_default_column(
-    filter="agTextColumnFilter",
-    filterParams={"buttons": ["reset", "apply"], "debounceMs": 200},
+    filter="agSetColumnFilter",   # список значень з галочками (як Google Sheets)
+    filterParams={
+        "buttons": ["reset", "apply"],
+        "excelMode": "windows",   # поведінка вибору як в Excel/Sheets
+    },
     floatingFilter=True,
     sortable=True,
     resizable=True,
