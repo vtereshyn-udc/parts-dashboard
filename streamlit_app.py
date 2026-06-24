@@ -9,9 +9,10 @@ from sqlalchemy import create_engine, text
 from mitosheet.streamlit.v1 import spreadsheet
 
 SOURCES = {
-    "Toro":      "parsing_toro",
-    "Husqvarna": "parsing_husqvarna",
-    "Ariens":    "parsing_ariens",
+    "Toro":        "parsing_toro",
+    "Husqvarna":   "parsing_husqvarna",
+    "Ariens":      "parsing_ariens",
+    "John Deere":  "parsing_deere",
 }
 TABLE = "parts"
 
