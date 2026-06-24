@@ -17,6 +17,7 @@ TABLE = "parts"
 
 st.set_page_config(page_title="Parts Dashboard", page_icon="🛠️", layout="wide")
 
+
 @st.cache_resource
 def get_engine():
     url = st.secrets.get("DATABASE_URL_TECH", "")
@@ -30,17 +31,19 @@ def get_engine():
         url = url.replace("postgres://", "postgresql://", 1)
     return create_engine(url, pool_pre_ping=True)
 
+
 @st.cache_data(ttl=300)
 def table_exists(schema: str) -> bool:
     eng = get_engine()
     q = text("""
         SELECT EXISTS (
-            SELECT 1 FROM information_schema.tables 
+            SELECT 1 FROM information_schema.tables
             WHERE table_schema = :schema AND table_name = :table
         )
     """)
     with eng.connect() as conn:
         return bool(conn.execute(q, {"schema": schema, "table": TABLE}).scalar())
+
 
 @st.cache_data(ttl=300)
 def load_data(schema: str) -> pd.DataFrame:
@@ -77,30 +80,104 @@ if df.empty:
     st.info(f"Таблиця {schema}.{TABLE} існує, але поки порожня - парсер ще не залив дані.")
     st.stop()
 
-# --- Метрики базового датафрейму ---
-metric_specs = [("Рядків усього", f"{len(df):2}")]
-if "mower" in df.columns:
-    metric_specs.append(("Косарок", df["mower"].nunique()))
-if "oem" in df.columns:
-    nonempty = df[df["oem"].astype(str).str.strip() != ""]
+# ============================ ШВИДКІ ФІЛЬТРИ (з «Обрати всі / Зняти всі») ============================
+# Над таблицею Mito. Потрібні саме для тисяч значень: щоб не клікати галочки
+# по одній, а швидко обрати/зняти все або вибрати кілька значень списком.
+st.subheader("🔎 Швидкі фільтри")
+st.caption("Звужують дані ще ДО таблиці. Зручно, коли значень тисячі. "
+           "Кнопка «Обрати всі / Зняти всі» — для кожного фільтра.")
+
+f = df.copy()
+
+# колонки, по яких має сенс фільтрувати списком (наявні в цього бренду)
+FILTER_LABELS = {
+    "equipment_type": "Тип обладнання",
+    "series": "Серія",
+    "mower": "Косарка",
+    "modification": "Модифікація",
+    "year": "Рік",
+    "scheme_name": "Назва схеми",
+}
+filter_cols = [c for c in FILTER_LABELS if c in f.columns]
+
+
+def col_values(frame, col):
+    v = frame[col].dropna().astype(str)
+    v = v[v.str.strip() != ""]
+    return sorted(v.unique().tolist())
+
+
+with st.expander("Відкрити швидкі фільтри", expanded=False):
+    boxes = st.columns(min(3, len(filter_cols)) or 1)
+    selections = {}
+    for i, col in enumerate(filter_cols):
+        box = boxes[i % len(boxes)]
+        opts = col_values(f, col)
+        label = FILTER_LABELS[col]
+        # стан вибору тримаємо в session_state, щоб кнопки select-all/clear працювали
+        sel_key = f"selvals_{source}_{col}"
+        if sel_key not in st.session_state:
+            st.session_state[sel_key] = []  # порожньо = фільтр не застосований (усі)
+
+        with box:
+            st.markdown(f"**{label}**  ·  значень: {len(opts)}")
+            bc1, bc2 = st.columns(2)
+            if bc1.button("Обрати всі", key=f"all_{source}_{col}", use_container_width=True):
+                st.session_state[sel_key] = opts
+            if bc2.button("Зняти всі", key=f"clr_{source}_{col}", use_container_width=True):
+                st.session_state[sel_key] = []
+            chosen = st.multiselect(
+                label, opts,
+                default=st.session_state[sel_key],
+                key=f"ms_{source}_{col}",
+                label_visibility="collapsed",
+            )
+            st.session_state[sel_key] = chosen
+            if chosen:
+                selections[col] = chosen
+
+    # застосовуємо вибране (порожній фільтр = не звужуємо)
+    for col, vals in selections.items():
+        f = f[f[col].astype(str).isin(vals)]
+
+    txt = st.text_input("Текстовий пошук (OEM / Опис / Replaces)", key=f"qsearch_{source}")
+    if txt:
+        s = txt.strip().lower()
+        scols = [c for c in ["oem", "description", "replaces"] if c in f.columns]
+        if scols:
+            mask = pd.Series(False, index=f.index)
+            for c in scols:
+                mask |= f[c].astype(str).str.lower().str.contains(s, na=False)
+            f = f[mask]
+
+st.caption(f"Після швидких фільтрів рядків: {len(f):,} із {len(df):,}")
+
+# --- Метрики (рахуються по відфільтрованому f, реагують на швидкі фільтри) ---
+metric_specs = [("Рядків", f"{len(f):,}")]
+if "mower" in f.columns:
+    metric_specs.append(("Косарок", f["mower"].nunique()))
+if "oem" in f.columns:
+    nonempty = f[f["oem"].astype(str).str.strip() != ""]
     metric_specs.append(("Унікальних OEM", nonempty["oem"].nunique()))
-if "scheme_name" in df.columns:
-    metric_specs.append(("Схем", df["scheme_name"].nunique()))
+if "scheme_name" in f.columns:
+    metric_specs.append(("Схем", f["scheme_name"].nunique()))
 
 cols = st.columns(len(metric_specs))
 for col_box, (lbl, val) in zip(cols, metric_specs):
     col_box.metric(lbl, val)
 
-# --- Підготовка даних для відображення ---
+# --- Підготовка даних для відображення: ВСІ стовпці, крім суто службових ---
+HIDE_TECH = {"id", "scraped_at"}
 preferred = [
     "brand", "equipment_type", "series", "mower",
     "modification", "year", "total_mods", "serial_numbers",
-    "scheme_name", "ref_no", "oem", "description", "replaces",
+    "scheme_name", "ref_no", "oem", "description", "replaces", "scheme_url",
 ]
-ordered = [c for c in preferred if c in df.columns]
-show = df[ordered].copy()
+ordered = [c for c in preferred if c in f.columns and c not in HIDE_TECH]
+rest = [c for c in f.columns if c not in ordered and c not in HIDE_TECH]
+show = f[ordered + rest].copy()
 
-# Перейменовуємо колонки відразу в датафреймі, бо Mito відображає технічні назви колонок
+# Людські назви колонок (Mito показує технічні назви, тож перейменовуємо)
 COL_CFG = {
     "brand": "Бренд",
     "equipment_type": "Тип обладнання",
@@ -115,24 +192,25 @@ COL_CFG = {
     "oem": "OEM",
     "description": "Опис",
     "replaces": "Replaces",
+    "scheme_url": "URL схеми",
 }
-show = show.rename(columns=COL_CFG)
+show = show.rename(columns={k: v for k, v in COL_CFG.items() if k in show.columns})
 
 # --- Відображення інтерактивної таблиці Mito ---
 st.subheader("📋 Каталог деталей")
-st.caption("💡 Натисніть на воронку (фільтр) у заголовку будь-якої колонки. Ви отримаєте пошук та чекбокси з унікальними значеннями.")
+st.caption("💡 У заголовку колонки — воронка (фільтр за значеннями) і вкладка "
+           "Filter/Sort (фільтр за умовою — зручно для тисяч значень). "
+           "Швидкі фільтри вище звужують дані ще до таблиці.")
 
-# Виклик Mito Sheet. Повертає змінені датафрейми та код кроків
 final_dfs, edit_history = spreadsheet(show)
 
-# Отримуємо поточний стан датафрейму після того, як користувач пофільтрував його руками в інтерфейсі Mito
 if final_dfs and list(final_dfs.keys()):
     first_key = list(final_dfs.keys())[0]
     filtered_show = final_dfs[first_key]
 else:
     filtered_show = show
 
-# --- Кнопки завантаження пофільтрованих даних ---
+# --- Кнопки завантаження ---
 st.write("")
 col_csv, col_xlsx = st.columns([1, 1])
 with col_csv:
@@ -151,11 +229,11 @@ with col_xlsx:
         col = safe[c].astype(str)
         col = col.replace({"inf": "", "-inf": "", "nan": "", "NaN": "", "None": "", "NaT": ""})
         safe[c] = col.str.slice(0, 32000)
-    
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         safe.to_excel(writer, index=False, sheet_name=(source[:31] or "Parts"))
-    
+
     st.download_button(
         "Завантажити відфільтрований Excel",
         data=buf.getvalue(),
@@ -177,18 +255,18 @@ oem_q = st.text_input(
 if oem_q and "oem" in df.columns:
     q = oem_q.strip().lower()
     hit = df[df["oem"].astype(str).str.lower().str.contains(q, na=False)]
-    
+
     if hit.empty:
         st.info(f"OEM, що містить «{oem_q}», у каталозі не знайдено.")
     else:
         uniq_oem = hit["oem"].nunique()
         st.caption(f"Знайдено збігів: {len(hit)} рядків, {uniq_oem} унікальних OEM")
-        
+
         cols_show = [c for c in ["oem", "description", "mower", "serial_numbers", "scheme_name", "ref_no", "replaces"] if c in hit.columns]
-        
+
         st.markdown("**Де зустрічається:**")
         st.dataframe(hit[cols_show], use_container_width=True, hide_index=True, height=260)
-        
+
         if "replaces" in hit.columns:
             repl = hit[hit["replaces"].astype(str).str.strip() != ""]
             if not repl.empty:
@@ -223,7 +301,7 @@ if "replaces" in df.columns and "oem" in df.columns and not df.empty:
     base = df[df["oem"].astype(str).str.strip() != ""]
     total_oem = base["oem"].nunique()
     with_repl = base[base["replaces"].astype(str).str.strip() != ""]["oem"].nunique()
-    
+
     if total_oem:
         pct = with_repl / total_oem * 100
         st.markdown("### Деталі із замінами (Replaces)")
