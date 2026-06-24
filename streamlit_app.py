@@ -166,15 +166,30 @@ cols = st.columns(len(metric_specs))
 for col_box, (lbl, val) in zip(cols, metric_specs):
     col_box.metric(lbl, val)
 
-# --- Підготовка даних для відображення: ВСІ стовпці, крім суто службових ---
+# --- Підготовка даних для відображення: ВСІ стовпці, крім службових і ПОРОЖНІХ ---
 HIDE_TECH = {"id", "scraped_at"}
+
+
+def is_empty_col(frame, col):
+    """Колонка вважається порожньою, якщо всі значення NaN або порожній рядок."""
+    s = frame[col]
+    if s.dropna().empty:
+        return True
+    nonblank = s.dropna().astype(str).str.strip()
+    return (nonblank == "").all()
+
+
+# мертві/дублюючі колонки зі старих версій парсера (порожні) — ховаємо
+empty_cols = {c for c in f.columns if is_empty_col(f, c)}
+
 preferred = [
     "brand", "equipment_type", "series", "mower",
     "modification", "year", "total_mods", "serial_numbers",
     "scheme_name", "ref_no", "oem", "description", "replaces", "scheme_url",
 ]
-ordered = [c for c in preferred if c in f.columns and c not in HIDE_TECH]
-rest = [c for c in f.columns if c not in ordered and c not in HIDE_TECH]
+drop = HIDE_TECH | empty_cols
+ordered = [c for c in preferred if c in f.columns and c not in drop]
+rest = [c for c in f.columns if c not in ordered and c not in drop]
 show = f[ordered + rest].copy()
 
 # Людські назви колонок (Mito показує технічні назви, тож перейменовуємо)
