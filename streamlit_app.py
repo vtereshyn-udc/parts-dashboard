@@ -13,6 +13,7 @@ SOURCES = {
     "Husqvarna":   "parsing_husqvarna",
     "Ariens":      "parsing_ariens",
     "John Deere":  "parsing_deere",
+    "Scag":        "parsing_scag",
 }
 TABLE = "parts"
 
