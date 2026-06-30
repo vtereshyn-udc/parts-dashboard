@@ -14,6 +14,7 @@ SOURCES = {
     "Ariens":      "parsing_ariens",
     "John Deere":  "parsing_deere",
     "Scag":        "parsing_scag",
+    "Hustler":     "parsing_hustler",
 }
 TABLE = "parts"
 
